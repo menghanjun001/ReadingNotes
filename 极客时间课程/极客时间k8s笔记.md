@@ -258,7 +258,7 @@ docker使用了cgroup（control group）来实现资源配额和namespace来实�
 
 ### docker的网络
 
-分为null/host/bridge
+分为none/host/bridge
 
 - None：不做任何网络配置，在容器不需要联网的存储密码等场景下使用
 
@@ -278,3 +278,4 @@ docker使用了cgroup（control group）来实现资源配额和namespace来实�
 # references
 - [kubernetes docs](https://kubernetes.io/zh-cn/docs/home/)
 - [linux 命令查询](https://wangchujiang.com/linux-command/c/cat.html)
+- [kubernetes handbook](https://hezhiqiang.gitbook.io/kubernetes-handbook/)
