@@ -248,6 +248,10 @@ docker使用了cgroup（control group）来实现资源配额和namespace来实�
   namespace的作用就是host掌控唯一的全局资源，让容器们彼此隔离
 
   - mount：让容器拥有file system，拥有自己的/目录
+  
+    什么叫mount（挂载）？
+  
+    > 比如windows下的分盘符——c盘 e盘，这就叫挂载，退出一个u盘，这就叫做unmount。一个文件系统可以找到，但不属于根目录，将其挂到/(根目录)下的行为就叫做mount。
   - UTS:让容器拥有自己的host name，默认是container短id
   - IPC：让容器进程拥有自己的内存，以及实现了semaphore来通信
   - PID：让容器进程拥有自己的一套pid，所有的容器下挂在dockerd进程下，容器内部的进程下挂在host pid=1的父进程下
