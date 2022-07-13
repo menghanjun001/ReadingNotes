@@ -172,13 +172,15 @@ borg是kubernetes前身，kubernetes即谷歌的borg的开源版本。
 
 ### 整体架构
 
+![Components of Kubernetes](https://d33wubrfki0l68.cloudfront.net/2475489eaf20163ec0f54ddc1d92aa8d4c87c96b/e7c81/images/docs/components-of-kubernetes.svg)
+
 ![img](https://1600098707-files.gitbook.io/~/files/v0/b/gitbook-legacy-files/o/assets%2F-LxzmfbtcTYE4On5ZpZ2%2F-LxzmxkNiaJCnAg1d53i%2F-Lxzn3k0WcqIKjDB3g3I%2Farchitecture.png?generation=1578397165138264&alt=media)
 
 ![img](https://1600098707-files.gitbook.io/~/files/v0/b/gitbook-legacy-files/o/assets%2F-LxzmfbtcTYE4On5ZpZ2%2F-LxzmxkNiaJCnAg1d53i%2F-Lxzn3k242pwmxarE0U-%2Fkubernetes-high-level-component-archtecture.jpg?generation=1578397164662526&alt=media)
 
 - master：负责维护集群状态
   - etcd：保存集群状态
-  - api server：网关，提供认证 鉴权的功能
+  - api server：网关，提供认证 鉴权的功能，同时拥有前端作为一个control plane（控制平面）
   - scheduler：调度器，负责资源的调度，按照预定的调度策略调度pod
   - controller manager：负责维护集群的状态，比如故障检测/滚动更新
 - node
@@ -207,9 +209,9 @@ borg是kubernetes前身，kubernetes即谷歌的borg的开源版本。
 
 ### api对象
 
-每个api对象都有三大属性：metadata/spec/status
+每个api对象都有三大属性（handbook说法）：metadata/spec/status，查阅文档发现必须字段有：apiVersion/kind/metadata/spec
 
-- metadata：元数据，用于标识api对象的，每个对象至少有三个元数据
+- metadata：元数据，用于标识api对象的，帮助识别对象唯一性的字段，每个对象至少有三个元数据
   - namespace：资源隔离
   - uid：唯一标识
   - name
@@ -442,9 +444,9 @@ node可以看成是一个slave节点，是承载pod运行的主机，可是物�
 
 CRI主要定义了kubelet与**容器运行时**通信的接口，采用的grpc协议，cri可以被定义为一个service类型的proto，文件详见[github kubernetes cri api](https://github.com/kubernetes/cri-api/blob/c75ef5b/pkg/apis/runtime/v1/api.proto)
 
-什么是容器运行时？
+什么是container runtime？
 
-> 负责运行容器的软件
+> 负责运行容器的软件，最常见的就是docker
 
 ![img](https://1600098707-files.gitbook.io/~/files/v0/b/gitbook-legacy-files/o/assets%2F-LxzmfbtcTYE4On5ZpZ2%2F-LxzmxkNiaJCnAg1d53i%2F-Lxzn-xbNQ0P0j2amd8F%2Fcri-architecture.png?generation=1578397159706418&alt=media)
 
@@ -506,5 +508,327 @@ spec:
 
 
 
-## kubernetes中的网络
+## pod状态与生命周期
+
+### pod概览
+
+#### 理解pod
+
+pod是kubernetes资源调度的最小单位，即可以创建和部署的最小单位。pod中可能由一个或多个容器自由组合来共享资源，通常docker是最常用的container runtime。**通常单个pod中不会运行一个应用的多个实例**。
+
+- 1pod-1container：这是最常见的用法，可以理解为pod是container的封装
+- 1pod-多container：多个container共享资源，组合为一个service。一个container是另一个container的sidecar模式。
+
+什么是sidecar模式？pod间 container 组合的模式有哪些？
+
+> 1. Sidecar 模式
+>
+>    sidecar模式是用一个sidecar容器增强主容器。如部署了一个nginx web的container，sidecar container用于对git仓库同步；对于sidecar部署的服务可以一次编写多次复用。
+>
+>    ![边车容器](https://d33wubrfki0l68.cloudfront.net/b7b7a33a62a27dead666a7c5ffc61cb89eeecf78/040b2/images/blog/2015-06-00-the-distributed-system-toolkit-patterns/sidecar-containers.png)
+>
+> 2. ambassador 模式
+>
+>    ambassador proxy是将副容器作为proxy来使用。如部署了一个web应用，副容器里的proxy负责代理流量从而实现对db/redis的读写实现像本地一样的读写。因为多container是共享网络就可以做到这一点。这一点的好处是web服务器不用写db配置文件的具体地址。
+>
+>    ![大使集装箱](https://d33wubrfki0l68.cloudfront.net/5b7d4af2e37b1d337ef0bd90b65b7944d7ecac8d/1d5bc/images/blog/2015-06-00-the-distributed-system-toolkit-patterns/ambassador-containers.png)
+>
+> 3. adapter 模式
+>
+>    adapter模式适用于对于一个pod内异构的多容器的服务，将其收集到的输出做一个统一化的规范。如将不同服务的监控数据统一为同一个数据结构。
+>
+>    ![适配器容器](https://d33wubrfki0l68.cloudfront.net/a55d1c355a9f778e38a775a87fd5b2b52db661dc/0c44c/images/blog/2015-06-00-the-distributed-system-toolkit-patterns/adapter-containers.png)
+
+
+
+pod中可以运行多个进程（容器），**同一个pod上的container会自动分配到同一个node上**。同一个pod上container的协作属于sidecar模式，因为pod内的container共享 网络 和 存储资源。
+
+- 网络：每个pod都有唯一的ip地址，pod内部容器的通信可以用localhost
+- 存储：为pod指定mount volume，可以有效防止pod重启造成的资源丢失，多container共享这些volume。
+
+
+
+#### 使用pod
+
+pod创建之后会被调度到相应的node上，除非pod终止/被驱逐/node故障，否则pod会一直保持在该node上。
+
+pod不会自愈，如果node故障/调度器故障，那么该pod就会被删除；如果node资源紧张，pod也会被删除。所以pod本质上是一种**用后即焚**的资源。
+
+> ps.重启pod和重启container是两回事。pod只是为container提供了容器环境和container runtime，重启container不会导致pod重启。
+
+
+
+controller可以创建/修改/删除pod。主要提供三种能力，通常controller会提供pod template来创建相应的pod。
+
+- 创建副本，即创建多个pod replica
+
+- 滚动更新
+
+- 自愈能力，如一个node故障，controller会自动将node上的pod调度到其他node。
+
+  > 这种现象也被称为漂移，即一个pod的ip会变化，被调度到其他node。
+  >
+  > 漂移在无状态应用下影响不大，对于有状态应用会导致pod下保存代表状态的临时文件丢失。所以对于有状态应用需要mount volume。
+
+controller的示例有：
+
+- deployment：适用于无状态应用
+- stateful set：适用于有状态应用
+- deamon set：适用于每个pod都需要的常驻稳定业务，如日志/监控等
+
+
+
+
+
+### pod解析
+
+#### pod的持久性
+
+pod不存在持久性，即为一种**用后即焚**的资源。在调度失败/node故障/node资源紧张的情况下pod都会被驱逐。通常pod的创建无需手动，应该使用controller，因为controller提供了自愈的功能。
+
+#### pod的终止
+
+pod的终止分为两种。
+
+- 优雅终止
+
+  kubectl delete 通过—grace-period=<seconds>可以设置一个宽限期，到期则将pod改为dead->terminating状态，当terminating状态后kubelet会终止该pod，然后api server会删除这个pod
+
+- 强制终止
+
+  在etcd下设置一个pod的状态为删除，api server就不会通过kubelet确认就移除。
+
+#### pod的数据结构
+
+![img](https://1600098707-files.gitbook.io/~/files/v0/b/gitbook-legacy-files/o/assets%2F-LxzmfbtcTYE4On5ZpZ2%2F-LxzmxkNiaJCnAg1d53i%2F-Lxzn3GSMfMapc7bCDhE%2Fkubernetes-pod-cheatsheet.png?generation=1578397159675607&alt=media)
+
+
+
+### init容器
+
+init容器是一种专用的容器，在应用程序容器之前运行，常用于安装一些应用容器中常用但不好存在的工具/环境/脚本
+
+#### 理解init容器
+
+init容器和普通容器有两点区别
+
+- init容器总是运行到成功为止
+- init容器如果有多个，那么会按顺序执行，每一个成功完成后才进行下一个
+
+init容器都启动成功后，pod才能就绪（即Ready状态）。
+
+#### init容器作用
+
+- init容器可以运行常用工具/环境，这些常用工具可以从运行程序的容器中解耦出来
+- init容器可以访问linux的namespace，区别于普通容器的file system，可以访问到Secret
+- init运行完毕后pod才就绪，这提供了一种阻塞或延迟应用容器启动的方式
+
+#### init容器的使用
+
+名为myapp的pod
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: myapp-pod
+  labels:
+    app: myapp
+spec:
+  containers:
+  - name: myapp-container
+    image: busybox
+    command: ['sh', '-c', 'echo The app is running! && sleep 3600']
+  initContainers:
+  - name: init-myservice
+    image: busybox
+    command: ['sh', '-c', 'until nslookup myservice; do echo waiting for myservice; sleep 2; done;']
+  - name: init-mydb
+    image: busybox
+    command: ['sh', '-c', 'until nslookup mydb; do echo waiting for mydb; sleep 2; done;']
+```
+
+名为myservice的Service
+
+```yaml
+kind: Service
+apiVersion: v1
+metadata:
+  name: myservice
+spec:
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 9376
+```
+
+名为mydb的Service
+
+```yaml
+kind: Service
+apiVersion: v1
+metadata:
+  name: mydb
+spec:
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 9377
+```
+
+该yaml指定了myapp-pod的就绪需要myservice和mydb两个init containers启动，当启动myapp-pod，describe myapp.yaml发现该pod处于Pending状态，一旦启动了myservice和mydb两个Service，该pod才处于Running状态。
+
+
+
+### pause容器
+
+pause容器即infra容器（infra：基础设施），docker ps下会发现node上运行很多pause容器
+
+```shell
+$ docker ps
+CONTAINER ID IMAGE COMMAND ...
+...
+3b45e983c859 gcr.io/google_containers/pause-amd64:3.0 "/pause" ...
+...
+dbfc35b00062 gcr.io/google_containers/pause-amd64:3.0 "/pause" ...
+...
+c4e998ec4d5d gcr.io/google_containers/pause-amd64:3.0 "/pause" ...
+...
+508102acf1e7 gcr.io/google_containers/pause-amd64:3.0 "/pause" ...
+```
+
+pause容器的功能就是namespace的具体实现，实现了资源隔离：
+
+- ipc：容器拥有自己的内存空间，通过semaphore通信
+- network：容器拥有自己独立的网卡，共享网络空间
+- pid：让容器拥有自己的pid
+- hostname：让容器拥有hostname
+
+![img](https://1600098707-files.gitbook.io/~/files/v0/b/gitbook-legacy-files/o/assets%2F-LxzmfbtcTYE4On5ZpZ2%2F-LxzmxkNiaJCnAg1d53i%2F-Lxzn2X3aelPvfmQ2zNp%2Fpause-container.png?generation=1578397163657683&alt=media)
+
+
+
+### pod的生命周期
+
+![img](https://1600098707-files.gitbook.io/~/files/v0/b/gitbook-legacy-files/o/assets%2F-LxzmfbtcTYE4On5ZpZ2%2F-LxzmxkNiaJCnAg1d53i%2F-LxznApu8V5sy3saSCQe%2Fkubernetes-pod-life-cycle.jpg?generation=1578397168757563&alt=media)
+
+
+
+- pending：pod创建但容器并未完全创建成功
+- running：至少一个容器创建成功
+- succedd：容器内的任务完成，容器成功终止
+- failed：容器非正常终止，重启成功后变为running
+
+
+
+## 集群资源管理
+
+### node
+
+node是kubernetes的工作节点，可以是物理机也可以是虚拟机
+
+#### node的管理
+
+添加node有两种方式：
+
+- kubelet向control plane自动注册
+
+- 手动添加一个node对象
+
+  ```yaml
+  {
+    "kind": "Node",
+    "apiVersion": "v1",
+    "metadata": {
+      "name": "10.240.79.157",
+      "labels": {
+        "name": "my-first-k8s-node"
+      }
+    }
+  }
+  ```
+
+  > ps.node创建后需要健康检查，对于不健康的node，kubernetes会一直保存并持续检查，所以对于不需要的node需要显式删除
+
+对于管理node，可以通过kubectl来手动管理：
+
+- 创建node：设置kubelet标志 --register-node=false
+
+- 修改node：修改node对象，比如修改为不可调度
+
+  - ```shell
+    kubectl cordon $NODENAME
+    ```
+
+    将该node修改为不可调度后，该node会阻止新pod的加入，对已存在的pod不影响。常用于重启或维护场景。
+
+  - ```shell
+    kubectl drain $NODENAME
+    ```
+
+    将该node上的pod（不包括daemon set）驱逐后，这些pod会在其他node上重新启动。常用于维护场景。
+
+#### node的一致性
+
+node的.metadata.name会标识他的唯一性。
+
+
+
+#### node的状态
+
+查看节点状态可以使用：
+
+```shell
+kubectl describe node <节点名称>
+```
+
+- Address
+  - Hostname
+  - ExternalIP：节点外部访问到的ip
+  - InternalIP：节点内部访问到的ip
+- Condition
+  - ready：就绪，准备接受pod
+  - diskpressure：true为存在硬盘压力
+  - memorypressure：true为存在内存压力
+  - pidpressure：true为存在进程数量压力
+  - networkunavailable：true为网络配置不正确
+- Capacity
+  - cpu
+  - 内存
+  - pod数量
+
+### namespace
+
+查看集群中的namespace，会发现默认有default和kube-system两个namespace。用户可以自己手动区分test/prod环境。
+
+```shell
+kubectl get ns
+```
+
+
+
+### label
+
+label是对pod进行索引查找的标签。label不是唯一的，多个object可以有相同的label。label selector可以filter出一组相同label的的pod。
+
+![img](https://1600098707-files.gitbook.io/~/files/v0/b/gitbook-legacy-files/o/assets%2F-LxzmfbtcTYE4On5ZpZ2%2F-LxzmxkNiaJCnAg1d53i%2F-Lxzn8w-gZf3uge5aK91%2Flabels.png?generation=1578397175794059&alt=media)
+
+对于label selector存在两种：
+
+- 使用==/!=/=操作符的
+
+  适用于service/replication controller等workload
+
+- 使用in/not in/!操作符的
+
+  适用于job/deployment/daemon set/replica set等workload
+
+```shell
+$ kubectl get pods -l environment=production,tier=frontend
+$ kubectl get pods -l 'environment in (production),tier in (frontend)'
+$ kubectl get pods -l 'environment in (production, qa)'
+$ kubectl get pods -l 'environment,environment notin (frontend)'
+```
+
+
 
