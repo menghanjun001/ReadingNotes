@@ -182,7 +182,7 @@ borg是kubernetes前身，kubernetes即谷歌的borg的开源版本。
   - etcd：保存集群状态
   - api server：网关，提供认证 鉴权的功能，同时拥有前端作为一个control plane（控制平面）
   - scheduler：调度器，负责资源的调度，按照预定的调度策略调度pod
-  - controller manager：负责维护集群的状态，比如故障检测/滚动更新
+  - controller manager：负责维护集群的状态，管理pod，比如故障检测/滚动更新
 - node
   - kubelet：负责维护容器的生命周期，负责网络和container runtime
   - container runtime：负责镜像管理和容器的真正运行，由kubelet来管理
@@ -809,7 +809,7 @@ kubectl get ns
 
 ### label
 
-label是对pod进行索引查找的标签。label不是唯一的，多个object可以有相同的label。label selector可以filter出一组相同label的的pod。
+label是对object进行索引查找的标签，常常用于指派一个pod 运行/不运行到一个具体的node上。label不是唯一的，多个object可以有相同的label。label selector可以filter出一组相同label的的pod。
 
 ![img](https://1600098707-files.gitbook.io/~/files/v0/b/gitbook-legacy-files/o/assets%2F-LxzmfbtcTYE4On5ZpZ2%2F-LxzmxkNiaJCnAg1d53i%2F-Lxzn8w-gZf3uge5aK91%2Flabels.png?generation=1578397175794059&alt=media)
 
@@ -832,3 +832,274 @@ $ kubectl get pods -l 'environment,environment notin (frontend)'
 
 
 
+### annotation
+
+label和annotation都作为管理资源的一个字段，但本质上有区别：
+
+- label：用于选择object
+- annotation：为object附加一个kv形式的元数据
+
+annotation的用法是：
+
+```yaml
+"metadata": {
+  "annotations": {
+    "key1" : "value1",
+    "key2" : "value2"
+  }
+}
+```
+
+> ps.annotaion下写的map kv必须都是string
+
+一个annotaion的使用例子是
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: annotations-demo
+  annotations:
+    imageregistry: "https://hub.docker.com/" # 附加一个元数据指定image registry
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.7.9
+    ports:
+    - containerPort: 80
+```
+
+
+
+### 将pod指派到node上
+
+将pod指派到一个特定node上的时候，可以参考[将pod指派到特定node上](https://kubernetes.io/zh-cn/docs/tasks/configure-pod-container/assign-pods-nodes/)。有三种方式，这三种方式的优劣是：
+
+- node name
+
+  硬性标准，为pod指明必须分配到node name=xx的node上
+
+- node selector
+
+  硬性标准，为pod指明分配到label=xx的node上
+
+- node affinity
+
+  软性标准，为pod和设置亲和性的设置
+
+
+
+#### node name
+
+使用spec下的node name指定特定的node
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  nodeName: foo-node # 调度 Pod 到特定的节点
+  containers:
+  - name: nginx
+    image: nginx
+    imagePullPolicy: IfNotPresent
+```
+
+#### node selector
+
+使用node selector指定node的标签
+
+1. 为node打标签
+2. 在pod的yaml里指定node selector的标签
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  labels:
+    env: test
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    imagePullPolicy: IfNotPresent
+  nodeSelector:
+    disktype: ssd #指定node的label
+```
+
+#### node affinity（节点亲和性）
+
+node affinity是pod的一种属性
+
+node affinity分两种：
+
+- `requiredDuringSchedulingIgnoredDuringExecution`： controller只有在规则被满足的时候才能执行调度
+- ```preferredDuringSchedulingIgnoredDuringExecution```：controller在规则被满足的情况下更倾向于调度
+
+示例：
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: with-node-affinity
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution: # 规则满足必须调度到那个node
+        nodeSelectorTerms:
+        - matchExpressions: #当node标签  kubernetes.io/os的value包含 linux
+          - key: kubernetes.io/os
+            operator: In # operator指明了操作符
+            values:
+            - linux
+      preferredDuringSchedulingIgnoredDuringExecution: #规则满足倾向于调度到那个node
+      - weight: 1 # 指定多个pereference的时候根据权重决定调度到哪个亲和性更强的node
+        preference:
+          matchExpressions: #当node标签  another-node-label-key的value包含 another-node-label-value
+          - key: another-node-label-key
+            operator: In
+            values:
+            - another-node-label-value
+  containers:
+  - name: with-node-affinity
+    image: k8s.gcr.io/pause:2.0
+```
+
+
+
+operator的操作符有：
+
+- 节点亲和性
+  - In
+  - Exists
+  - gt：greater than >
+  - lt：less than <
+- 节点反亲和性
+  - NotIn
+  - DoesNotExist
+
+对于反亲和性，这里有关于反亲和性的两个概念：taint和toleration，具体使用例子详见[taint&toleration](https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/taint-and-toleration/)
+
+- taint：污点，描述node上的一个污点条件
+- toleration：容忍度，描述pod上能够容忍污点的条件，若条件匹配污点，则证明该pod可以被调度到相应污点的node上
+
+> ps.容忍度表达的意思其实是可以但没必要，即使pod能够容忍node的污点，也不一定会调度到该node上
+
+对于设置了反亲和性条件的pod和node，node会驱逐无法容忍自己污点的pod。
+
+
+
+### 垃圾收集
+
+#### owner和dependent 从属关系
+
+在kubernetes的对象中，存在从属关系，比如一组pod可以属于一个replica set，此时replica set是owner，这一组pod是dependent
+
+示例为：
+
+```shell
+kubectl create -f https://k8s.io/docs/concepts/abstractions/controllers/my-repset.yaml #创建该replica set
+kubectl get pods --output=yaml #查看replica下的这一组pods
+```
+
+Replica set的yaml：
+
+```yaml
+apiVersion: extensions/v1beta1
+kind: ReplicaSet
+metadata:
+  name: my-repset
+spec:
+  replicas: 3
+```
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  ownerReferences: #表明pod的从属关系
+  - apiVersion: extensions/v1beta1
+    controller: true
+    blockOwnerDeletion: true
+    kind: ReplicaSet
+    name: my-repset #owner的name是my-repset的replica set
+    uid: d9607e19-f88f-11e6-a518-42010a800195
+```
+
+
+
+
+
+## 服务发现
+
+### service
+
+service是对逻辑上一组提供服务的pods在抽象上的归纳。实际上是作为一个proxy来代理到提供服务的一组/一个pod上。如两种指明
+
+- 有selector的，通过label指明
+
+  ```yaml
+  kind: Service
+  apiVersion: v1
+  metadata:
+    name: my-service
+  spec:
+    selector: # 会代理到暴露了9376端口切label app=MyApp的pod上
+      app: MyApp
+    ports:
+      - protocol: TCP
+        port: 80
+        targetPort: 9376
+  ```
+
+  
+
+- 没有selector的，通过手动指向endpoint的ip指明
+
+  ```yaml
+  kind: Service
+  apiVersion: v1
+  metadata:
+    name: my-service
+  spec:
+    ports:
+      - protocol: TCP
+        port: 80
+        targetPort: 9376
+  ```
+
+  ```yaml
+  kind: Endpoints
+  apiVersion: v1
+  metadata:
+    name: my-service # 手动bind到my-service
+  subsets:
+    - addresses:
+        - ip: 1.2.3.4 # 手动指向1.2.3.4:9376
+      ports:
+        - port: 9376
+  ```
+
+  或是指明到集群外的服务器：
+
+  ```yaml
+  kind: Service
+  apiVersion: v1
+  metadata:
+    name: my-service
+    namespace: prod
+  spec:
+    type: ExternalName
+    externalName: my.database.example.com
+  ```
+
+  
+
+### ingress
+
+ingress的出现是对service的上游做了个反向代理规则的集合，来决定http/s流量应该落在哪个service上。
+
+![img](https://ask.qcloudimg.com/http-save/1460359/87iev7yx4t.png?imageView2/2/w/1620)
